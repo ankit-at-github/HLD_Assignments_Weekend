@@ -3,6 +3,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -114,6 +115,36 @@ public class OrderApi {
      */
     static void createOrder(HttpExchange ex) throws IOException {
         Map<String, Object> body = Http.body(ex);
+        String customerId = (String) body.get("customerId");
+        List<?> itemsList = (List<?>) body.get("items");
+        if(customerId == null || customerId.trim().isEmpty() ||
+                itemsList == null || itemsList.isEmpty()){
+            Http.send(ex, 400, Map.of("error", "customerId is required"));
+            return;
+        }
+        BigDecimal totalPrice = BigDecimal.ZERO;
+        for(Object createOrder : itemsList){
+            Map<String, Object> createOrderMap = (Map<String, Object>) createOrder;
+            String itemId = (String) createOrderMap.get("itemId");
+            Number qty = (Number) createOrderMap.get("qty");
+            int qtyNumber = qty != null ? qty.intValue() : 0;
+            if(itemId == null || itemId.trim().isEmpty() || MENU.get(itemId) == null ||
+                    qtyNumber < 1 || qtyNumber > 20 ){
+                Http.send(ex, 400, Map.of("error", "itemId is required"));
+                return;
+            }
+            BigDecimal itemPrice = BigDecimal.valueOf(MENU.get(itemId).price());
+            totalPrice = totalPrice.add(itemPrice.multiply(BigDecimal.valueOf(qtyNumber)));
+        }
+        String createdOrderId = "ord_" + SEQ.incrementAndGet();
+        Map<String, Object> createOrderResponse = Map.of(
+                "id", createdOrderId,
+                "customerId", customerId,
+                "status", Status.PLACED,
+                "total", totalPrice
+        );
+        ex.getResponseHeaders().set("Location", "/orders/" + createdOrderId);
+        Http.send(ex, 201, createOrderResponse);
         String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
         throw new UnsupportedOperationException("TODO(1) not implemented yet");
     }
