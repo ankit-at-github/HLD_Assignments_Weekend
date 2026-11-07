@@ -11,6 +11,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.logging.Logger;
 
 /**
  * Exercise 01 — REST API for QuickBite orders.
@@ -123,30 +124,35 @@ public class OrderApi {
             return;
         }
         BigDecimal totalPrice = BigDecimal.ZERO;
-        for(Object createOrder : itemsList){
-            Map<String, Object> createOrderMap = (Map<String, Object>) createOrder;
-            String itemId = (String) createOrderMap.get("itemId");
-            Number qty = (Number) createOrderMap.get("qty");
+        List<Item> orderItems = new ArrayList<>();
+        for(Object item : itemsList){
+            Map<String, Object> itemMap = (Map<String, Object>) item;
+            String itemId = (String) itemMap.get("itemId");
+            Number qty = (Number) itemMap.get("qty");
             int qtyNumber = qty != null ? qty.intValue() : 0;
             if(itemId == null || itemId.trim().isEmpty() || MENU.get(itemId) == null ||
                     qtyNumber < 1 || qtyNumber > 20 ){
                 Http.send(ex, 400, Map.of("error", "itemId is required"));
                 return;
             }
+            orderItems.add(new Item(itemId, qtyNumber));
             BigDecimal itemPrice = BigDecimal.valueOf(MENU.get(itemId).price());
             totalPrice = totalPrice.add(itemPrice.multiply(BigDecimal.valueOf(qtyNumber)));
         }
         String createdOrderId = "ord_" + SEQ.incrementAndGet();
-        Map<String, Object> createOrderResponse = Map.of(
-                "id", createdOrderId,
-                "customerId", customerId,
-                "status", Status.PLACED,
-                "total", totalPrice
+        Order createdOrder = new Order(
+                createdOrderId,
+                customerId,
+                orderItems,
+                totalPrice.intValue(),
+                Status.PLACED,
+                Instant.now().toString()
         );
+        ORDERS.put(createdOrderId, createdOrder);
+        //The resource you just created can now be found at this specific URL
         ex.getResponseHeaders().set("Location", "/orders/" + createdOrderId);
-        Http.send(ex, 201, createOrderResponse);
+        Http.send(ex, 201, createdOrder);
         String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
     }
 
     /**
@@ -154,7 +160,19 @@ public class OrderApi {
      * TODO(2): return 200 with the order, or 404 {"error": "..."} if it does not exist.
      */
     static void getOrder(HttpExchange ex, String id) throws IOException {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        if(id == null) {
+            Http.send(ex, 400, Map.of("error", "OrderId is required"));
+            //return is required to ensure that handler stops execution right there and exits cleanly if intended
+            return;
+        }
+
+        Order order = ORDERS.get(id);
+        if(order == null){
+            Http.send(ex, 404, Map.of("error", "ORDER NOT FOUND"));
+            return;
+        }
+
+        Http.send(ex,200, order);
     }
 
     /**
