@@ -11,6 +11,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
 
 /**
  * Exercise 01 — REST API for QuickBite orders.
@@ -184,7 +186,68 @@ public class OrderApi {
      */
     static void listOrders(HttpExchange ex) throws IOException {
         Map<String, String> q = Http.query(ex);
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        String statusParam = q.get("status");
+        String limitParam = q.get("limit");
+        String offsetParam = q.get("offset");
+
+        //Checking Valid Status if provided
+        boolean isValidStatus = Arrays.stream(Status.values())
+                .anyMatch(s -> s.name().equalsIgnoreCase(statusParam));
+        if(statusParam != null && !isValidStatus){
+            Http.send(ex, 400, Map.of("error", "Invalid status"));
+            return;
+        }
+
+        //Checking Valid Limit
+        int limit = 10;
+        if (limitParam != null) {
+            try {
+                limit = Integer.parseInt(limitParam);
+                if (limit < 1 || limit > 50) {
+                    Http.send(ex, 400, Map.of("error", "Invalid limit"));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                Http.send(ex, 400, Map.of("error", "Invalid limit"));
+                return;
+            }
+        }
+
+        //Checking Valid Offset
+        int offset = 0;
+        if (offsetParam != null) {
+            try {
+                offset = Integer.parseInt(offsetParam);
+                if (offset < 0) {
+                    Http.send(ex, 400, Map.of("error", "Invalid offset"));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                Http.send(ex, 400, Map.of("error", "Invalid offset"));
+                return;
+            }
+        }
+
+        //Filter Orders by status if provided
+        List<Order> allOrders = new ArrayList<>(ORDERS.values());
+        final Status targetStatus = statusParam == null ? null : Status.valueOf(statusParam.toUpperCase());
+
+        List<Order> filteredOrders = allOrders.stream()
+                .filter(o -> targetStatus == null || o.status() == targetStatus)
+                .collect(Collectors.toList());
+
+        //Apply pagination (offset & limit) using subList
+        int start = Math.min(offset, filteredOrders.size());
+        int end = Math.min(start + limit, filteredOrders.size());
+        List<Order> paginatedOrders = filteredOrders.subList(start, end);
+        //Construct Response
+        Map<String, Object> responseBody = Map.of(
+                "items", paginatedOrders,
+                "total", filteredOrders.size(),
+                "limit", limit,
+                "offset", offset
+        );
+        Http.send(ex, 200, responseBody);
     }
 
     /**
