@@ -116,6 +116,14 @@ public class OrderApi {
      */
     static void createOrder(HttpExchange ex) throws IOException {
         Map<String, Object> body = Http.body(ex);
+        String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
+        if(idemKey != null && IDEMPOTENCY_KEYS.containsKey(idemKey)) {
+            Order originalOrder = ORDERS.get(IDEMPOTENCY_KEYS.get(idemKey));
+            ex.getResponseHeaders().set("Idempotent-Replayed", "true");
+            Http.send(ex, 200, originalOrder);
+            return;
+        }
+
         String customerId = (String) body.get("customerId");
         List<?> itemsList = (List<?>) body.get("items");
         if(customerId == null || customerId.trim().isEmpty() ||
@@ -149,10 +157,12 @@ public class OrderApi {
                 Instant.now().toString()
         );
         ORDERS.put(createdOrderId, createdOrder);
+
+        if(idemKey != null) IDEMPOTENCY_KEYS.put(idemKey, createdOrderId);
+
         //The resource you just created can now be found at this specific URL
         ex.getResponseHeaders().set("Location", "/orders/" + createdOrderId);
         Http.send(ex, 201, createdOrder);
-        String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
     }
 
     /**
