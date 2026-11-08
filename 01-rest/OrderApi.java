@@ -11,7 +11,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collector;
 import java.util.stream.Collectors;
 
 /**
@@ -260,7 +259,42 @@ public class OrderApi {
      */
     static void patchOrder(HttpExchange ex, String id) throws IOException {
         Map<String, Object> body = Http.body(ex);
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+
+        // Check if order exists
+        Order existingOrder = ORDERS.get(id);
+        if(existingOrder == null){
+            Http.send(ex, 404, Map.of("error", "ORDER NOT FOUND"));
+            return;
+        }
+
+        // Check if status is missing
+        Object statusParam = body.get("status");
+        if(statusParam == null){
+            Http.send(ex, 400, Map.of("error", "Status Missing"));
+            return;
+        }
+
+        String updateOrderStatus = statusParam.toString();
+        if (!Status.CANCELLED.name().equalsIgnoreCase(updateOrderStatus)) {
+            Http.send(ex, 400, Map.of("error", "Only CANCELLED status is allowed"));
+            return;
+        }
+        if (existingOrder.status() != Status.PLACED) {
+            Http.send(ex, 409, Map.of("error", "cannot cancel an order that is " + existingOrder.status()));
+            return;
+        }
+        // Creating a new Order Record instance copying the old field, but with new status
+        Order updatedOrder = new Order(
+                existingOrder.id(),
+                existingOrder.customerId(),
+                existingOrder.items(),
+                existingOrder.total(),
+                Status.CANCELLED,
+                existingOrder.createdAt()
+        );
+        ORDERS.put(id, updatedOrder);
+
+        Http.send(ex, 200, updatedOrder);
     }
 
     /**
