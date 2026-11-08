@@ -3,6 +3,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -10,6 +11,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 /**
  * Exercise 01 — REST API for QuickBite orders.
@@ -114,8 +116,43 @@ public class OrderApi {
      */
     static void createOrder(HttpExchange ex) throws IOException {
         Map<String, Object> body = Http.body(ex);
+        String customerId = (String) body.get("customerId");
+        List<?> itemsList = (List<?>) body.get("items");
+        if(customerId == null || customerId.trim().isEmpty() ||
+                itemsList == null || itemsList.isEmpty()){
+            Http.send(ex, 400, Map.of("error", "customerId is required"));
+            return;
+        }
+        BigDecimal totalPrice = BigDecimal.ZERO;
+        List<Item> orderItems = new ArrayList<>();
+        for(Object item : itemsList){
+            Map<String, Object> itemMap = (Map<String, Object>) item;
+            String itemId = (String) itemMap.get("itemId");
+            Number qty = (Number) itemMap.get("qty");
+            int qtyNumber = qty != null ? qty.intValue() : 0;
+            if(itemId == null || itemId.trim().isEmpty() || MENU.get(itemId) == null ||
+                    qtyNumber < 1 || qtyNumber > 20 ){
+                Http.send(ex, 400, Map.of("error", "itemId is required"));
+                return;
+            }
+            orderItems.add(new Item(itemId, qtyNumber));
+            BigDecimal itemPrice = BigDecimal.valueOf(MENU.get(itemId).price());
+            totalPrice = totalPrice.add(itemPrice.multiply(BigDecimal.valueOf(qtyNumber)));
+        }
+        String createdOrderId = "ord_" + SEQ.incrementAndGet();
+        Order createdOrder = new Order(
+                createdOrderId,
+                customerId,
+                orderItems,
+                totalPrice.intValue(),
+                Status.PLACED,
+                Instant.now().toString()
+        );
+        ORDERS.put(createdOrderId, createdOrder);
+        //The resource you just created can now be found at this specific URL
+        ex.getResponseHeaders().set("Location", "/orders/" + createdOrderId);
+        Http.send(ex, 201, createdOrder);
         String idemKey = ex.getRequestHeaders().getFirst("Idempotency-Key");
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
     }
 
     /**
@@ -123,7 +160,19 @@ public class OrderApi {
      * TODO(2): return 200 with the order, or 404 {"error": "..."} if it does not exist.
      */
     static void getOrder(HttpExchange ex, String id) throws IOException {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        if(id == null) {
+            Http.send(ex, 400, Map.of("error", "OrderId is required"));
+            //return is required to ensure that handler stops execution right there and exits cleanly if intended
+            return;
+        }
+
+        Order order = ORDERS.get(id);
+        if(order == null){
+            Http.send(ex, 404, Map.of("error", "ORDER NOT FOUND"));
+            return;
+        }
+
+        Http.send(ex,200, order);
     }
 
     /**
@@ -136,7 +185,68 @@ public class OrderApi {
      */
     static void listOrders(HttpExchange ex) throws IOException {
         Map<String, String> q = Http.query(ex);
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        String statusParam = q.get("status");
+        String limitParam = q.get("limit");
+        String offsetParam = q.get("offset");
+
+        //Checking Valid Status if provided
+        boolean isValidStatus = Arrays.stream(Status.values())
+                .anyMatch(s -> s.name().equalsIgnoreCase(statusParam));
+        if(statusParam != null && !isValidStatus){
+            Http.send(ex, 400, Map.of("error", "Invalid status"));
+            return;
+        }
+
+        //Checking Valid Limit
+        int limit = 10;
+        if (limitParam != null) {
+            try {
+                limit = Integer.parseInt(limitParam);
+                if (limit < 1 || limit > 50) {
+                    Http.send(ex, 400, Map.of("error", "Invalid limit"));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                Http.send(ex, 400, Map.of("error", "Invalid limit"));
+                return;
+            }
+        }
+
+        //Checking Valid Offset
+        int offset = 0;
+        if (offsetParam != null) {
+            try {
+                offset = Integer.parseInt(offsetParam);
+                if (offset < 0) {
+                    Http.send(ex, 400, Map.of("error", "Invalid offset"));
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                Http.send(ex, 400, Map.of("error", "Invalid offset"));
+                return;
+            }
+        }
+
+        //Filter Orders by status if provided
+        List<Order> allOrders = new ArrayList<>(ORDERS.values());
+        final Status targetStatus = statusParam == null ? null : Status.valueOf(statusParam.toUpperCase());
+
+        List<Order> filteredOrders = allOrders.stream()
+                .filter(o -> targetStatus == null || o.status() == targetStatus)
+                .collect(Collectors.toList());
+
+        //Apply pagination (offset & limit) using subList
+        int start = Math.min(offset, filteredOrders.size());
+        int end = Math.min(start + limit, filteredOrders.size());
+        List<Order> paginatedOrders = filteredOrders.subList(start, end);
+        //Construct Response
+        Map<String, Object> responseBody = Map.of(
+                "items", paginatedOrders,
+                "total", filteredOrders.size(),
+                "limit", limit,
+                "offset", offset
+        );
+        Http.send(ex, 200, responseBody);
     }
 
     /**
@@ -149,7 +259,42 @@ public class OrderApi {
      */
     static void patchOrder(HttpExchange ex, String id) throws IOException {
         Map<String, Object> body = Http.body(ex);
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+
+        // Check if order exists
+        Order existingOrder = ORDERS.get(id);
+        if(existingOrder == null){
+            Http.send(ex, 404, Map.of("error", "ORDER NOT FOUND"));
+            return;
+        }
+
+        // Check if status is missing
+        Object statusParam = body.get("status");
+        if(statusParam == null){
+            Http.send(ex, 400, Map.of("error", "Status Missing"));
+            return;
+        }
+
+        String updateOrderStatus = statusParam.toString();
+        if (!Status.CANCELLED.name().equalsIgnoreCase(updateOrderStatus)) {
+            Http.send(ex, 400, Map.of("error", "Only CANCELLED status is allowed"));
+            return;
+        }
+        if (existingOrder.status() != Status.PLACED) {
+            Http.send(ex, 409, Map.of("error", "cannot cancel an order that is " + existingOrder.status()));
+            return;
+        }
+        // Creating a new Order Record instance copying the old field, but with new status
+        Order updatedOrder = new Order(
+                existingOrder.id(),
+                existingOrder.customerId(),
+                existingOrder.items(),
+                existingOrder.total(),
+                Status.CANCELLED,
+                existingOrder.createdAt()
+        );
+        ORDERS.put(id, updatedOrder);
+
+        Http.send(ex, 200, updatedOrder);
     }
 
     /**
