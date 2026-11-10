@@ -65,16 +65,18 @@ public class PollingClient {
 
         while(!"DELIVERED".equalsIgnoreCase(currentStatus)){
             requests++;
+
             String path = "/orders/" + id + "/status";
             HttpResponse<String> response = send("GET", path, "{}");
-            currentStatus = field(response.body(), "status");
-            long currentVersion = Long.parseLong(field(response.body(), "version"));
+            String body = response.body();
+            currentStatus = field(body, "status");
+            long currentVersion = Long.parseLong(field(body, "version"));
 
             if(lastVersion != -1){
                 if(currentVersion == lastVersion){
                     wasted++;
                 }else{
-                    onUpdate(response.body(), (int) lastVersion);
+                    onUpdate(body, (int) lastVersion);
                     lastVersion = currentVersion;
                 }
             }else{
@@ -97,7 +99,32 @@ public class PollingClient {
      *   - 200 -> onUpdate(body, lastVersion), remember the version, stop at DELIVERED
      */
     static void longPoll(String id) throws Exception {
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        long lastVersion = 1;
+        String currentStatus = "";
+
+        while(!"DELIVERED".equalsIgnoreCase(currentStatus)){
+            requests++;
+
+            String path = "/orders/" + id + "/status?sinceVersion=" + lastVersion + "&timeoutMs=10000";
+
+            HttpResponse<String> response = send("GET", path, "{}");
+
+            if(response.statusCode() == 204){
+                wasted++;
+                continue;
+            }
+
+            String body = response.body();
+            currentStatus = field(body, "status");
+            long currentVersion = Long.parseLong(field(body, "version"));
+
+            if(currentVersion == lastVersion){
+                wasted++;
+            }else{
+                onUpdate(body, (int) lastVersion);
+                lastVersion = currentVersion;
+            }
+        }
     }
 
     // ---------------- given helpers ----------------

@@ -49,7 +49,7 @@ java PollingClient.java long
 | short 500 ms | 26            | 21     | 285ms            | 0            |
 | short 2000 ms | 8             | 3      | 1114ms           | 0            |
 | short 5000 ms | 4             | 0      | 1028ms           | 1            |
-| long |               |        |                  |              |
+| long | 4             | 0      | 4ms              | 0            |
 
 Run `short 5000` a few times — you'll see `!! skipped` lines. The app **never showed** some statuses.
 
