@@ -31,7 +31,7 @@ public class PollingClient {
 
     public static void main(String[] args) throws Exception {
         String mode = args.length > 0 ? args[0] : "short";
-        long intervalMs = args.length > 1 ? Long.parseLong(args[1]) : 2000;
+        long intervalMs = args.length > 1 ? Long.parseLong(args[1]) : 5000;
 
         String created = send("POST", "/orders", "{}").body();
         String id = field(created, "orderId");
@@ -60,7 +60,33 @@ public class PollingClient {
      *   - stop when status is DELIVERED
      */
     static void shortPoll(String id, long intervalMs) throws Exception {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        long lastVersion = -1;
+        String currentStatus = "";
+
+        while(!"DELIVERED".equalsIgnoreCase(currentStatus)){
+            requests++;
+            String path = "/orders/" + id + "/status";
+            HttpResponse<String> response = send("GET", path, "{}");
+            currentStatus = field(response.body(), "status");
+            long currentVersion = Long.parseLong(field(response.body(), "version"));
+
+            if(lastVersion != -1){
+                if(currentVersion == lastVersion){
+                    wasted++;
+                }else{
+                    onUpdate(response.body(), (int) lastVersion);
+                    lastVersion = currentVersion;
+                }
+            }else{
+                lastVersion = currentVersion;
+            }
+
+            if("DELIVERED".equalsIgnoreCase(currentStatus)){
+                break;
+            }
+
+            Thread.sleep(intervalMs);
+        }
     }
 
     /**
