@@ -147,7 +147,76 @@ public class TrackingServer {
      *   - Take the snapshot inside the lock, send the HTTP response AFTER unlocking.
      */
     static void longPoll(HttpExchange ex, TrackedOrder order, Map<String, String> q) throws IOException {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        // 1. Parse and validate sinceVersion
+        long sinceVersion = 0;
+        String sinceParam = q.get("sinceVersion");
+        if(sinceParam != null && !sinceParam.isEmpty()){
+            try{
+                sinceVersion = Long.parseLong(sinceParam);
+                if(sinceVersion < 0){
+                    Http.send(ex, 400, Map.of("error", "Invalid sinceVersion"));
+                    return;
+                }
+            }catch(NumberFormatException e){
+                Http.send(ex, 400, Map.of("error", "Invalid sinceVersion"));
+                return;
+            }
+        }
+        // 2. Parse and validate timeoutMs (default 2500, cap at MAX_WAIT_MS)
+        long timeoutMs = 25000;
+        String timeoutParam = q.get("timeoutMs");
+        if(timeoutParam != null && !timeoutParam.isEmpty()){
+            try{
+                timeoutMs = Long.parseLong(timeoutParam);
+                if(timeoutMs < 0){
+                    Http.send(ex, 400, Map.of("error", "Invalid timeoutMs"));
+                    return;
+                }
+                // Cap at MAX_WAIT_MS constant
+                timeoutMs = Math.min(timeoutMs, MAX_WAIT_MS);
+            }catch (NumberFormatException e){
+                Http.send(ex, 400, Map.of("error", "Invalid timeoutMs format"));
+                return;
+            }
+        }
+
+        Map<String, Object> snap = null;
+        boolean timeOut = false;
+        // 3. Lock acquisition and condition waiting
+        order.lock.lock();
+        try{
+            long remainingNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+            // Re-check condition in a while loop (handles spurious wakeups and early signals)
+            while(order.version <= sinceVersion){
+                if(remainingNanos <= 0){
+                    timeOut = true;
+                    break;
+                }
+                try{
+                    //awaiting returns remaining nanoseconds after waking up
+                    // awaitNanos(long nanosTimeout) blocks your thread; when it wakes up
+                    // (whether because the timeout expired, someone called signal(), or due to a "spurious wakeup"),
+                    // it measures how much time actually passed and returns the exact number of nanoseconds left.
+                    remainingNanos = order.changed.awaitNanos(remainingNanos);
+                }catch (InterruptedException e){
+                    Thread.currentThread().interrupt();
+                    Http.send(ex, 500, Map.of("error", "Request Interrupted"));
+                    return;
+                }
+            }
+            //if a change happened (version > sinceVersion), take the snapshot inside the lock
+            if(!timeOut){
+                snap = order.snapshot();
+            }
+        } finally {
+            order.lock.unlock();
+        }
+
+        if(timeOut){
+            Http.send(ex, 204, null); // No Content
+        }else{
+            Http.send(ex, 200, snap); // Sending new SnapShot
+        }
     }
 }
 

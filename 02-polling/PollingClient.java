@@ -31,7 +31,7 @@ public class PollingClient {
 
     public static void main(String[] args) throws Exception {
         String mode = args.length > 0 ? args[0] : "short";
-        long intervalMs = args.length > 1 ? Long.parseLong(args[1]) : 2000;
+        long intervalMs = args.length > 1 ? Long.parseLong(args[1]) : 5000;
 
         String created = send("POST", "/orders", "{}").body();
         String id = field(created, "orderId");
@@ -60,7 +60,35 @@ public class PollingClient {
      *   - stop when status is DELIVERED
      */
     static void shortPoll(String id, long intervalMs) throws Exception {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        long lastVersion = -1;
+        String currentStatus = "";
+
+        while(!"DELIVERED".equalsIgnoreCase(currentStatus)){
+            requests++;
+
+            String path = "/orders/" + id + "/status";
+            HttpResponse<String> response = send("GET", path, "{}");
+            String body = response.body();
+            currentStatus = field(body, "status");
+            long currentVersion = Long.parseLong(field(body, "version"));
+
+            if(lastVersion != -1){
+                if(currentVersion == lastVersion){
+                    wasted++;
+                }else{
+                    onUpdate(body, (int) lastVersion);
+                    lastVersion = currentVersion;
+                }
+            }else{
+                lastVersion = currentVersion;
+            }
+
+            if("DELIVERED".equalsIgnoreCase(currentStatus)){
+                break;
+            }
+
+            Thread.sleep(intervalMs);
+        }
     }
 
     /**
@@ -71,7 +99,32 @@ public class PollingClient {
      *   - 200 -> onUpdate(body, lastVersion), remember the version, stop at DELIVERED
      */
     static void longPoll(String id) throws Exception {
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        long lastVersion = 1;
+        String currentStatus = "";
+
+        while(!"DELIVERED".equalsIgnoreCase(currentStatus)){
+            requests++;
+
+            String path = "/orders/" + id + "/status?sinceVersion=" + lastVersion + "&timeoutMs=10000";
+
+            HttpResponse<String> response = send("GET", path, "{}");
+
+            if(response.statusCode() == 204){
+                wasted++;
+                continue;
+            }
+
+            String body = response.body();
+            currentStatus = field(body, "status");
+            long currentVersion = Long.parseLong(field(body, "version"));
+
+            if(currentVersion == lastVersion){
+                wasted++;
+            }else{
+                onUpdate(body, (int) lastVersion);
+                lastVersion = currentVersion;
+            }
+        }
     }
 
     // ---------------- given helpers ----------------
