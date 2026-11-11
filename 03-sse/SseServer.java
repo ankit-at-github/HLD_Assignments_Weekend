@@ -123,7 +123,16 @@ public class SseServer {
      * That's the entire protocol. It's just text over a response that never ends.
      */
     static void writeEvent(OutputStream os, int id, String event, String data) throws IOException {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        //Construct SSE wire format string
+        String sseMessage = "id: " + id + "\n" +
+                            "event: " + event + "\n" +
+                            "data: " + data + "\n\n"; //Double newline marks the end of the event
+
+        //write the bytes using standard UTF-8 encoding
+        os.write(sseMessage.getBytes(StandardCharsets.UTF_8));
+
+        //Flush immediately so the browser receives the data right away
+        os.flush();
     }
 
     /**
@@ -144,7 +153,86 @@ public class SseServer {
      *   A client that disconnects shows up as an IOException on write — just let it end the method.
      */
     static void stream(HttpExchange ex, TrackedOrder order) throws IOException {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        // 1. Get lastSent from header, query param, or default to 0
+        String lastEvent = ex.getRequestHeaders().getFirst("Last-Event-ID");
+        if(lastEvent == null){
+            lastEvent = Http.query(ex).get("lastEventId");
+        }
+        long lastSent = lastEvent == null ? 0 : Long.parseLong(lastEvent);
+
+        order.lock.lock();
+        try{
+            if(!order.history.isEmpty()){
+                String currentOrderStatus = order.history.getLast().get("status").toString();
+                boolean isFinished = "DELIVERED".equalsIgnoreCase(currentOrderStatus);
+
+                //If the order is done and the client already has all recorded events
+                if(isFinished && lastSent >= order.history.size()){
+                    Http.send(ex, 204, null); // Tells browser to stop reconnecting
+                    return;
+                }
+            }
+        }finally {
+            order.lock.unlock();
+        }
+
+        //Set SSE Headers
+        ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        //Send Response Headers, 0 signals chunked streaming data
+        ex.sendResponseHeaders(200, 0);
+
+        OutputStream os = ex.getResponseBody();
+        while(true){
+            List<Map<String, Object>> currentOrderHistory = new ArrayList<>();
+
+            order.lock.lock();
+            try{
+                while(order.history.size() <= lastSent){
+                    // If order is DELIVERED and client is fully caught up, exit stream cleanly
+                    String currentStatus = order.history.get(order.history.size() - 1).get("status").toString();
+                    if("DELIVERED".equalsIgnoreCase(currentStatus) && lastSent >= order.history.size()){
+                        return;
+                    }
+
+                    // Wait for new updates or 15s keep-alive timeout
+                    boolean isUpdated = order.changed.await(15, TimeUnit.SECONDS);
+                    if(!isUpdated){
+                        String commentLine = ": keep-alive\n\n";
+                        os.write(commentLine.getBytes(StandardCharsets.UTF_8));
+                        os.flush();
+                    }
+                }
+                currentOrderHistory = order.history.subList((int)lastSent, order.history.size());
+            } catch (InterruptedException e){
+                Thread.currentThread().interrupt();
+                Http.send(ex, 500, "Request Interrupted");
+                return;
+            } finally {
+                order.lock.unlock();
+            }
+
+            //send each new entry live
+            for(Map<String, Object> entry : currentOrderHistory){
+                int version = ((Number) entry.get("version")).intValue();
+                String eventData = Json.write(entry);
+                writeEvent(os, version, "status", eventData);
+                lastSent = version;
+            }
+
+            // Check if we just sent the DELIVERED event, and close the stream if so
+            order.lock.lock();
+            try{
+                if(!order.history.isEmpty()){
+                    String currentStatus = order.history.get(order.history.size() - 1).get("status").toString();
+                    if("DELIVERED".equalsIgnoreCase(currentStatus) && lastSent >= order.history.size()){
+                        return;
+                    }
+                }
+            }finally {
+                order.lock.unlock();
+            }
+        }
     }
 }
 
