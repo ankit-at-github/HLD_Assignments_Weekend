@@ -85,15 +85,30 @@ public class GraphQLServer {
      *   Read an argument with:  String cuisine = env.getArgument("cuisine");   (null if not passed)
      */
     static List<Restaurant> restaurants(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(1) not implemented yet");
+        String cuisine = env.getArgument("cuisine");
+        if (cuisine == null) {
+            return RESTAURANTS;
+        } 
+        return RESTAURANTS.stream()
+                .filter(r -> r.cuisine().equalsIgnoreCase(cuisine))
+                .toList();
+        
+        // throw new UnsupportedOperationException("TODO(1) not implemented yet");
     }
+
+
 
     /**
      * TODO(2): Query.restaurant(id: ID!)  -> the restaurant, or null if not found.
      *   (null is fine: the schema says `Restaurant` without "!", so it's nullable.)
      */
     static Restaurant restaurant(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(2) not implemented yet");
+        String id = env.getArgument("id");
+        return RESTAURANTS.stream()
+                .filter(r -> r.id().equals(id))
+                .findFirst()
+                .orElse(null);
+        // throw new UnsupportedOperationException("TODO(2) not implemented yet");
     }
 
     /**
@@ -105,7 +120,14 @@ public class GraphQLServer {
      *   - Return MENU items for r.id(), filtered by veg when vegOnly is true.
      */
     static List<MenuItem> menu(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        // throw new UnsupportedOperationException("TODO(3) not implemented yet");
+        Restaurant r = env.getSource();
+        boolean vegOnly = env.getArgument("vegOnly");
+        MENU_QUERIES.incrementAndGet();
+        return MENU.stream()
+                .filter(m -> m.restaurantId().equals(r.id()))
+                .filter(m -> !vegOnly || m.veg())
+                .toList();  
     }
 
     /** Restaurant.reviews(last: Int = 3) — GIVEN, use it as the example for TODO 3. */
@@ -128,7 +150,23 @@ public class GraphQLServer {
      *   Note: a thrown exception does NOT give an HTTP 500. It shows up in the "errors" array (see README Q2).
      */
     static Review addReview(DataFetchingEnvironment env) {
-        throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        // throw new UnsupportedOperationException("TODO(4) not implemented yet");
+        Map<String, Object> input = env.getArgument("input");
+        String restaurantId = (String) input.get("restaurantId");
+        int rating = (Integer) input.get("rating");
+        String comment = (String) input.get("comment"); 
+
+        boolean restaurantExists = RESTAURANTS.stream()
+                .anyMatch(r -> r.id().equals(restaurantId));
+        if (!restaurantExists) {
+            throw new IllegalArgumentException("No restaurant " + restaurantId);
+        }
+        if (rating < 1 || rating > 5) {
+            throw new IllegalArgumentException("rating must be 1..5");
+        }
+        Review review = new Review("v" + REVIEW_SEQ.incrementAndGet(), restaurantId, "guest", rating, comment);
+        REVIEWS.add(review);
+        return review;  
     }
 
     // =====================================================================
